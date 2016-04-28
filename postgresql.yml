@@ -1,0 +1,42 @@
+--- #installation et config de postgresql
+- hosts: postgresql
+  user: test
+  become: yes
+  connection: ssh
+  gather_facts: no
+  tasks:
+    - name: update all packages 
+      raw: apt-get update
+    - name: Installation Postgresql
+      apt: name={{item}} state=installed
+      with_items:
+        - postgresql
+        - libpq-dev
+        - python-psycopg2
+      notify: lancer postgresql 
+  handlers:
+       - name: lancer postgresql
+         service: name=postgresql state=restarted
+- hosts: postgresql
+  sudo: yes
+  sudo_user: postgres
+  gather_facts: no
+
+  vars:
+    dbname: db0
+    dbuser: yassine
+    dbpassword: yassine
+
+  tasks:
+  - name: s'assurer de la creation de la table
+    postgresql_db: name={{dbname}}
+  - name: donner à l'utilisaeurs les privileges pour l'acces  la base 
+    postgresql_user: db={{dbname}} name={{dbuser}} password={{dbpassword}} priv=ALL
+  - name: creation d'une table dans la base de données
+    command: psql -U postgres db0 -c 'CREATE TABLE IF NOT EXISTS tb0 (val1 varchar(20), val2 varchar(20));'
+  - name : insertion dans la table
+    command: psql -U postgres db0 -c "INSERT INTO tb0 VALUES('mm', 'ss');"
+  - name: verification de l'insertion
+    command: psql -U postgres -d db0 -c "SELECT * FROM tb0;" 
+    register: result
+  - debug: var=result
