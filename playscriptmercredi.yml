@@ -1,0 +1,101 @@
+--- #playbook du  Script de  mercredi
+- hosts: postgresql
+  user: test
+  sudo: yes
+  connection: ssh
+  gather_facts: no
+  tasks:
+    - name: lister   recursivement nom, taile et date modification de l'ensemble fichiers du repertoire  dans un fichier temporaire
+      raw: find  /home/test -type f -exec ls -l {} \; | cut -d " " -f9,8,7,6,5 > tmp0.txt
+    - name: stocker les donnés  sous format csv dans un fichier
+      raw: awk -F " " '{print $5 "," $3 $2 $4 "," $1}' tmp0.txt > fichier.csv
+    - name: recuperation des valeurs du fichier csv et les mettre sous format sql 
+      shell: awk -F "," '{print "\047" $1 "\047,\047 " $2 "\047," $3}' fichier.csv
+      register: tabdata
+    - debug: var=tabdata
+ 
+
+    - name: mis a jour des packages
+      raw: apt-get update
+    - name: Installation Postgresql
+      apt: name={{item}} state=installed
+      with_items:
+        - postgresql
+        - libpq-dev
+        - python-psycopg2
+      notify: lancer postgresql 
+  handlers:
+       - name: lancer postgresql
+         service: name=postgresql state=restarted
+
+- hosts: postgresql
+  sudo: yes
+  sudo_user: postgres
+  gather_facts: no
+
+  vars:
+    dbname: files
+    dbuser: yassine
+    dbpassword: yassine
+
+  tasks:
+   - name: s'assurer de la creation de la table
+     postgresql_db: name={{dbname}}
+   - name: creation d'une table dans la base de données
+     command: psql -U postgres files -c 'CREATE TABLE IF NOT EXISTS tbfiles (nom varchar(100), date varchar(50) , taille integer);'
+   - name: verfication  creation de la table
+     command: psql -U postgres -d files -c "SELECT * FROM tbfiles;" 
+     register: result
+   - debug: var=result   
+   - name:  insertion dans la table à partir du fichier csv
+     command: psql -U postgres -d files -c "insert into tbfiles values({{ item }});"
+     with_items:
+      - "{{tabdata.stdout_lines}}"
+   - name: verfication  creation de la table
+     command: psql -U postgres -d files -c "SELECT * FROM tbfiles;"
+     register: verif
+   - debug: var=verif
+
+   - name: calcul somme espace total
+     shell: psql -U postgres -d files -c "SELECT  SUM(a.taille) FROM  tbfiles a;" 
+     register: res
+   - debug:  var=res 
+   - name: calcul nombre total de fichiers 
+     shell: psql -U postgres -d files -c "SELECT COUNT(*) from tbfiles ;"
+     register: nbr
+   - debug: var=nbr
+- hosts: localhost
+  user: test
+  tasks:
+   - name: verfier la presence du cronjob dans la crontab
+     raw: crontab -l  | grep playbookcron > tmpcronverif.txt
+   - raw: wc -l tmpcronverif.txt > tmpcronverif2.txt
+   - raw: cat tmpcronverif2.txt
+     register: ver
+   - debug: var=ver
+   - name:  effectuer un cronjob qui  execute toute les 5 minutes le playbook
+     cron: name="playbookcron"   minute="*/5" job="ansible-playbook /home/test/playscriptmercredi.yml"
+     when: ver != ""
+     register: ress
+   - debug: var=ress
+
+- hosts: postgresql
+  user : test 
+  sudo: yes
+  tasks:  
+   - name: recuperer la sommme
+     raw: echo {{ res }}  > tmpsomme.txt
+   - name: stocker la somme dans le fichier log
+     raw: sed -n 3p tmpsomme.txt >> /var/log/syslog 
+   - name: recuperer le nombre de fichiers dans le repertoir
+     raw: echo {{ nbr}} >  tmpnb.txt 
+   - name: stocker nombre total de fichier dans la bannier de login
+     raw: sed -n 3p tmpnb.txt >> /var/run/motd.dynamic
+   - name: stocker l'espace total consomé dans la banniere de login
+     raw: sed -n 3p tmpsomme.txt >> /var/run/motd.dynamic
+   - name: trier les fichier par date
+     raw:  find  /home/test -type f -exec ls -lt {} \; > tmpder 
+   - name: stocker le dernier fichier modifié dans la banniere de login
+     raw:  tail -1 tmpder >> /var/run/motd.dynamic
+
+
